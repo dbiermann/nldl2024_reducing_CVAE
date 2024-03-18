@@ -1,0 +1,89 @@
+import os
+import torch
+import numpy as np
+import pandas as pd
+import lightning.pytorch as pl
+from datasets import load_dataset, Dataset
+from transformers import AutoTokenizer, DataCollatorWithPadding
+from torch.utils.data import DataLoader
+from random import shuffle
+
+class ArxivDataModule(pl.LightningDataModule):
+    def __init__(self, batch=16, max_length=256):
+        super().__init__()
+        os.environ["TOKENIZERS_PARALLELISM"] = "False"
+        self.batch = batch
+        self.max_length = max_length
+        self.data_dir = 'data/arxiv/'
+        self.tokenizer = AutoTokenizer.from_pretrained('distilbert-base-uncased')
+       # self.tokenizer.add_special_tokens({'pad_token': '<PAD>'})
+       # self.tokenizer.add_special_tokens({'bos_token': '<S>'})
+       # self.tokenizer.add_special_tokens({'eos_token': '<E>'})
+        self.data_collator = DataCollatorWithPadding(self.tokenizer, max_length=self.max_length, padding=True)
+
+    def prepare_data(self):
+        # AI category
+        data_abs = os.path.join(self.data_dir, 'artificial intelligence_10047_15000_15_abs.txt')
+        data_titles = os.path.join(self.data_dir, 'artificial intelligence_10047_15000_15_title.txt')
+        with open(data_abs, errors='ignore') as fp:
+            abs = fp.readlines()
+        with open(data_titles, errors='ignore') as ft:
+            titles = ft.readlines()
+        assert len(titles) == len(abs)
+        ai_data = [(0, t.strip(), p.strip()) for t, p in zip(titles, abs) if t.strip() != '' and p.strip() != '']
+
+        # Computer vision
+        data_abs = os.path.join(self.data_dir, 'computer vision_14582_15000_15_abs.txt')
+        data_titles = os.path.join(self.data_dir, 'computer vision_14582_15000_15_title.txt')
+        with open(data_abs, errors='ignore') as fp:
+            abs = fp.readlines()
+        with open(data_titles, errors='ignore') as ft:
+            titles = ft.readlines()
+        assert len(titles) == len(abs)
+        cv_data = [(1, t.strip(), p.strip()) for t, p in zip(titles, abs) if t.strip() != '' and p.strip() != '']
+
+        # language generation category
+        data_abs = os.path.join(self.data_dir, 'language generation_14514_15000_15_abs.txt')
+        data_titles = os.path.join(self.data_dir, 'language generation_14514_15000_15_title.txt')
+        with open(data_abs, errors='ignore') as fp:
+            abs = fp.readlines()
+        with open(data_titles, errors='ignore') as ft:
+            titles = ft.readlines()
+        assert len(titles) == len(abs)
+        lg_data = [(2, t.strip(), p.strip()) for t, p in zip(titles, abs) if t.strip() != '' and p.strip() != '']
+
+        texts = ai_data + cv_data + lg_data
+        # Create dataset object
+        df = pd.DataFrame(texts, columns=['category', 'title', 'abstract'])
+        # Add title to text and add special tokens
+        df['abstract'] = '<S> ' + df['title'] + df['abstract'] + ' <E>'
+        #df['abstract'] = df['title'] + df['abstract']
+        arx = Dataset.from_pandas(df)
+        tokenized_arx = arx.map(self.tokenize_function, batched=True)
+        tokenized_arx = tokenized_arx.remove_columns(['title', 'abstract'])
+        tokenized_arx = tokenized_arx.train_test_split(train_size=0.9, shuffle=True, seed=11)
+        self.train_set = tokenized_arx['train']
+        self.val_set = tokenized_arx['test']
+        self.train_set.set_format('torch')
+        self.val_set.set_format('torch')
+
+    def tokenize_function(self, samples):
+        return self.tokenizer(samples['abstract'], max_length=self.max_length, padding=True, truncation=True)
+        
+    def get_vocab_size(self):
+        return len(self.tokenizer)
+
+    def train_dataloader(self):
+        self.train_loader = DataLoader(self.train_set, shuffle=True, batch_size=self.batch, collate_fn=self.data_collator, num_workers=2)
+        return self.train_loader
+
+    def val_dataloader(self):
+        self.val_loader = DataLoader(self.val_set, shuffle=False, batch_size=self.batch, collate_fn=self.data_collator, num_workers=2)
+        return self.val_loader
+
+    def get_vocab_size(self):
+        return len(self.tokenizer)
+
+if __name__ == '__main__':
+    arx = ArxivDataModule(batch=4, max_length=256)
+    arx.prepare_data()
